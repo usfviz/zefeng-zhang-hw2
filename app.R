@@ -28,12 +28,26 @@ fertility_rate <- melt(fertility_rate, id = c("Country.Name", "Region"))
 colnames(fertility_rate) <- c("Country", "Region", "Year", "Fertility.rate")
 fertility_rate <- fertility_rate[!is.na(fertility_rate$Fertility.rate), ]
 
+# Population
+population <- read.csv("API_SP.POP.TOTL_DS2_en_csv_v2/API_SP.POP.TOTL_DS2_en_csv_v2.csv", 
+                           skip=4, header=TRUE)
+population <- population[c(1, 5:59)]
+population_region <- read.csv("API_SP.POP.TOTL_DS2_en_csv_v2/Metadata_Country_API_SP.POP.TOTL_DS2_en_csv_v2.csv", 
+                              header=TRUE)[c("TableName", "Region")]
+colnames(population_region) <- c("Country.Name", "Region")
+population <- merge(x=population, y=population_region, by="Country.Name")
+population <- melt(population, id = c("Country.Name", "Region"))
+colnames(population) <- c("Country", "Region", "Year", "Population")
+population <- population[!is.na(population$Population), ]
+
 # cleaned data frame
 df <- merge(x=life_expectancy, y=fertility_rate, by=c("Country", "Region", "Year"))
+df <- merge(x=df, y=population, by=c("Country", "Region", "Year"))
 df$Year <- as.integer(gsub("X", "", as.character(df$Year)))
 df <- df[df$Region != "", ] 
 df$Region <- factor(df$Region)
 df$Country <- as.character(df$Country)
+df$id <- 1:nrow(df)
 
 #################################################################
 ui <- fluidPage(
@@ -43,34 +57,36 @@ ui <- fluidPage(
     selectInput(inputId='region', label='Region', choices=c("ALL", levels(df$Region)), selected="ALL")
   ),
   mainPanel(
-    plotOutput('plot1', hover = "plot_hover"),
-    verbatimTextOutput("info")
+    uiOutput("ggvis_ui"),
+    ggvisOutput("ggvis")
   )
 )
 
 server <- function(input, output) {
+  
   selectedData <- reactive({
     if (input$region == "ALL"){
-      return (df[df$Year == input$num, ])
-    } 
+      subset(df, df$Year == input$num)
+    }
     else{
-      return (df[df$Region == input$region & df$Year == input$num, ]) 
+      subset(df, df$Year == input$num & df$Region == input$region)
     }
   })
-  hoverPoint <- reactive({
-    return (input$plot_hover)
-  })
-  output$plot1 <- renderPlot({
-    p <- ggplot(data=selectedData(), aes(x=Life.expectancy, y=Fertility.rate, colour=factor(Region))) + 
-      geom_point() +
-      coord_cartesian(xlim=c(10,90),ylim=c(0.5,9)) 
-    return (p)
-  })
-  output$info <- renderText({
-    point <- nearPoints(df=selectedData(), coordinfo=hoverPoint(), threshold=1000,
-                        xvar="Life.expectancy", yvar="Fertility.rate", maxpoints=1)
-    return (point$Country)
-  })
+  
+  all_values <- function(x) {
+    if(is.null(x)) return(NULL)
+    row <- df[df$id == x$id, ]
+    as.character(row$Country)
+  }
+  
+    ggvis(selectedData, ~Life.expectancy, ~Fertility.rate, key := ~id) %>%
+    add_tooltip(all_values, "hover") %>%
+    layer_points(opacity := 0.5, stroke := "black", size = ~Population, fill = ~factor(Region)) %>%
+    hide_legend('size') %>%
+    scale_numeric("x", domain = c(10, 90), nice = FALSE) %>%
+    scale_numeric("y", domain = c(0.5, 9), nice = FALSE) %>%
+    bind_shiny("ggvis", "ggvis_ui")
+    
 }
 
 shinyApp(ui = ui, server = server)
